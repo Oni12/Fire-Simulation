@@ -25,6 +25,7 @@ export class MapViewer {
   });
 
   private ngZone = inject(NgZone);
+  private burnedCells = new Set<string>();
 
   constructor() {
     effect(() => {
@@ -93,13 +94,9 @@ export class MapViewer {
   private readonly gridSize = 40;
 
   private drawGrid(updates: CellUpdate[]): void {
-    if (this.gridLayer) {
-      this.gridLayer.clearLayers();
-    } else {
+    if (!this.gridLayer) {
       this.gridLayer = L.layerGroup().addTo(this.map!);
     }
-
-    if (!updates.length) return;
 
     const bounds = this.polygon?.getBounds();
     if (!bounds) return;
@@ -115,32 +112,36 @@ export class MapViewer {
     const lngStep = lngSpan / this.gridSize;
 
     for (const update of updates) {
+      if (update.status === 'quemado') {
+        this.burnedCells.add(`${update.row},${update.col}`);
+      }
+    }
+
+    this.gridLayer.clearLayers();
+
+    for (const key of this.burnedCells) {
+      const [r, c] = key.split(',').map(Number);
+      const cellMaxLat = maxLat - r * latStep;
+      const cellMinLat = maxLat - (r + 1) * latStep;
+      const cellMinLng = minLng + c * lngStep;
+      const cellMaxLng = minLng + (c + 1) * lngStep;
+      L.rectangle(
+        [[cellMaxLat, cellMinLng], [cellMinLat, cellMaxLng]],
+        { color: '#555555', fillColor: '#555555', fillOpacity: 0.45, weight: 0 }
+      ).addTo(this.gridLayer);
+    }
+
+    for (const update of updates) {
+      if (update.status !== 'fuego') continue;
       const cellMaxLat = maxLat - update.row * latStep;
       const cellMinLat = maxLat - (update.row + 1) * latStep;
       const cellMinLng = minLng + update.col * lngStep;
       const cellMaxLng = minLng + (update.col + 1) * lngStep;
-
-      const color =
-        update.status === 'fuego'
-          ? '#e63946'
-          : update.status === 'quemado'
-          ? '#4a4a4a'
-          : 'transparent';
-
-      if (color !== 'transparent') {
-        L.rectangle(
-          [
-            [cellMaxLat, cellMinLng],
-            [cellMinLat, cellMaxLng],
-          ],
-          {
-            color,
-            fillColor: color,
-            fillOpacity: 0.7,
-            weight: 0,
-          }
-        ).addTo(this.gridLayer!);
-      }
+      L.rectangle(
+        [[cellMaxLat, cellMinLng], [cellMinLat, cellMaxLng]],
+        { color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.7, weight: 0 }
+      ).addTo(this.gridLayer);
     }
   }
+
 }
