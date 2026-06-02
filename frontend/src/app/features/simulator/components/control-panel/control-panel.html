@@ -4,12 +4,26 @@
   <div class="wind-section">
     <h3>Viento</h3>
     <div class="wind-row">
-      <span class="label">Velocidad:</span>
-      <span class="value">{{ windData()?.speed ?? '—' }} km/h</span>
+      <span class="label">Velocidad (km/h):</span>
+      <input
+        type="number"
+        class="wind-input"
+        [value]="windSpeed()"
+        (input)="onSpeedInput($event)"
+        min="0"
+        max="200"
+      />
     </div>
     <div class="wind-row">
-      <span class="label">Dirección:</span>
-      <span class="value">{{ windData()?.direction ?? '—' }}°</span>
+      <span class="label">Dirección (°):</span>
+      <input
+        type="number"
+        class="wind-input"
+        [value]="windDirection()"
+        (input)="onDirectionInput($event)"
+        min="0"
+        max="360"
+      />
     </div>
   </div>
 

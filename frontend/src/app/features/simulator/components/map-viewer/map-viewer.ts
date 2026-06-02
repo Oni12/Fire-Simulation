@@ -26,11 +26,14 @@ export class MapViewer {
 
   private ngZone = inject(NgZone);
   private burnedCells = new Set<string>();
+  private activeFires = new Set<string>();
 
   constructor() {
     effect(() => {
       const polygons = this.zonePolygons();
       if (polygons.length && this.map) {
+        this.activeFires.clear();
+        this.burnedCells.clear();
         this.drawZones(polygons);
       }
     });
@@ -120,8 +123,13 @@ export class MapViewer {
     const lngStep = lngSpan / this.gridSize;
 
     for (const update of updates) {
-      if (update.status === 'quemado') {
-        this.burnedCells.add(`${update.row},${update.col}`);
+      const key = `${update.row},${update.col}`;
+      if (update.status === 'fuego') {
+        this.activeFires.add(key);
+        this.burnedCells.delete(key);
+      } else if (update.status === 'quemado') {
+        this.burnedCells.add(key);
+        this.activeFires.delete(key);
       }
     }
 
@@ -139,12 +147,12 @@ export class MapViewer {
       ).addTo(this.gridLayer);
     }
 
-    for (const update of updates) {
-      if (update.status !== 'fuego') continue;
-      const cellMaxLat = maxLat - update.row * latStep;
-      const cellMinLat = maxLat - (update.row + 1) * latStep;
-      const cellMinLng = minLng + update.col * lngStep;
-      const cellMaxLng = minLng + (update.col + 1) * lngStep;
+    for (const key of this.activeFires) {
+      const [r, c] = key.split(',').map(Number);
+      const cellMaxLat = maxLat - r * latStep;
+      const cellMinLat = maxLat - (r + 1) * latStep;
+      const cellMinLng = minLng + c * lngStep;
+      const cellMaxLng = minLng + (c + 1) * lngStep;
       L.rectangle(
         [[cellMaxLat, cellMinLng], [cellMinLat, cellMaxLng]],
         { color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.7, weight: 0 }

@@ -2,7 +2,7 @@ import { Component, OnInit, OnDestroy, signal, computed } from '@angular/core';
 import { SimulationService } from './services/simulation';
 import { ControlPanel } from './components/control-panel/control-panel';
 import { MapViewer } from './components/map-viewer/map-viewer';
-import { WindData, CellUpdate } from '../../shared/interfaces';
+import { CellUpdate } from '../../shared/interfaces';
 import { Subscription } from 'rxjs';
 
 @Component({
@@ -13,10 +13,11 @@ import { Subscription } from 'rxjs';
   styleUrls: ['./simulator.css'],
 })
 export class SimulatorComponent implements OnInit, OnDestroy {
-  windData = signal<WindData | null>(null);
   zonePolygons = signal<[number, number][][]>([]);
   cellUpdates = signal<CellUpdate[]>([]);
   ignitionPoint = signal<[number, number] | null>(null);
+  windSpeed = signal(15.5);
+  windDirection = signal(180);
   isRunning = signal(false);
   isPaused = signal(false);
   loading = signal(true);
@@ -31,8 +32,9 @@ export class SimulatorComponent implements OnInit, OnDestroy {
     this.subs.push(
       this.simulation.getInitialData().subscribe({
         next: (data) => {
-          this.windData.set(data.wind);
           this.zonePolygons.set(data.zonePolygons);
+          this.windSpeed.set(data.wind.speed);
+          this.windDirection.set(data.wind.direction);
           this.loading.set(false);
         },
         error: () => this.loading.set(false),
@@ -56,12 +58,11 @@ export class SimulatorComponent implements OnInit, OnDestroy {
   }
 
   onStart(): void {
-    const wind = this.windData();
     const point = this.ignitionPoint();
-    if (!wind || !point) return;
+    if (!point) return;
     this.simulation.startSimulation({
-      windSpeed: wind.speed,
-      windDirection: wind.direction,
+      windSpeed: this.windSpeed(),
+      windDirection: this.windDirection(),
       ignitionPoint: point,
     });
     this.isRunning.set(true);

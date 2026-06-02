@@ -47,6 +47,23 @@
   font-weight: 500;
 }
 
+.wind-input {
+  width: 90px;
+  padding: 4px 8px;
+  border: 1px solid #3d3d5c;
+  border-radius: 4px;
+  background: #0f0f23;
+  color: #ffffff;
+  font-size: 0.85rem;
+  font-weight: 500;
+  text-align: right;
+  outline: none;
+}
+
+.wind-input:focus {
+  border-color: #457b9d;
+}
+
 .controls-section {
   display: flex;
   flex-direction: column;

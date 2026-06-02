@@ -3,6 +3,7 @@ import asyncio
 import os
 import json
 import subprocess
+import random
 import logging
 from enum import Enum
 from typing import Callable
@@ -53,6 +54,7 @@ class SimulationEngine:
         self._humidity: float = DEFAULT_HUMIDITY
         self.wind_speed_grid: list[list[float]] | None = None
         self.wind_direction_grid: list[list[float]] | None = None
+        self.burn_remaining: list[list[int]] | None = None
 
     def configure(
         self,
@@ -76,6 +78,8 @@ class SimulationEngine:
 
         row, col = self._geo_to_grid(ignition_lat, ignition_lng)
         self.grid[row][col] = CellStatus.FUEGO
+        if self.burn_remaining is not None:
+            self.burn_remaining[row][col] = random.randint(3, 5)
 
     # ------------------------------------------------------------------
     # Elevation DEM download & loading
@@ -317,6 +321,9 @@ class SimulationEngine:
             [CellStatus.COMBUSTIBLE for _ in range(self.cols)]
             for _ in range(self.rows)
         ]
+        self.burn_remaining = [
+            [0 for _ in range(self.cols)] for _ in range(self.rows)
+        ]
 
     def _geo_to_grid(self, lat: float, lng: float) -> tuple[int, int]:
         lat_min, lat_max, lng_min, lng_max = self._zone_bounds
@@ -395,22 +402,32 @@ class SimulationEngine:
             if self.wind_direction_grid is not None
             else self.wind_direction
         )
-        if local_speed <= 0:
-            return 0.3
-        angle_diff = (neighbor_angle - local_dir + 360) % 360
+        K, C, h_extra = self._get_vegetation_params(nr, nc)
+        P = self._get_slope_factor(r, c, nr, nc)
+        H = max(0.01, self._humidity * 0.35 + h_extra)
+
+        wind_toward = (360 - local_dir) % 360
+        angle_diff = (neighbor_angle - wind_toward + 360) % 360
         if angle_diff > 180:
             angle_diff = 360 - angle_diff
         alignment = math.cos(math.radians(angle_diff))
-        alignment = max(0.0, alignment)
-        V_eff = local_speed * alignment
-        K, C, h_extra = self._get_vegetation_params(nr, nc)
-        P = self._get_slope_factor(r, c, nr, nc)
-        H = self._humidity * 0.35 + h_extra
-        if H < 0.01:
-            H = 0.01
-        INP = (K * C * P * (V_eff ** 2)) / H
-        prob = INP / (INP + 1.0)
-        return min(prob, 0.95)
+
+        # Background spread (radiation + flame contact) — omnidirectional
+        if alignment > 0:
+            background = 0.12
+        else:
+            background = 0.04 + 0.04 * (1.0 + alignment)
+
+        # Wind-driven component (INP formula) — only downwind
+        if alignment > 0 and local_speed > 0:
+            V_eff = local_speed * alignment
+            INP = (K * C * P * (V_eff ** 2)) / H
+            wind_prob = INP / (INP + 1.0)
+        else:
+            wind_prob = 0.0
+
+        prob = min(background + wind_prob, 0.95)
+        return prob
 
     # ------------------------------------------------------------------
     # Control
@@ -452,16 +469,32 @@ class SimulationEngine:
 
     def _step(self) -> list[dict]:
         new_grid = [row[:] for row in self.grid]
+        new_burn = (
+            [row[:] for row in self.burn_remaining]
+            if self.burn_remaining is not None
+            else None
+        )
         updates: list[dict] = []
 
         for r in range(self.rows):
             for c in range(self.cols):
                 if self.grid[r][c] == CellStatus.FUEGO:
-                    new_grid[r][c] = CellStatus.QUEMADO
-                    updates.append({"row": r, "col": c, "status": CellStatus.QUEMADO})
-                    self._spread_to_neighbors(r, c, new_grid, updates)
+                    # Solo ~55% de las celdas intentan propagarse por paso
+                    if random.random() < 0.55:
+                        self._spread_to_neighbors(r, c, new_grid, new_burn, updates)
+
+                    if new_burn is not None:
+                        new_burn[r][c] -= 1
+                        if new_burn[r][c] <= 0:
+                            new_grid[r][c] = CellStatus.QUEMADO
+                            updates.append({"row": r, "col": c, "status": CellStatus.QUEMADO})
+                    else:
+                        new_grid[r][c] = CellStatus.QUEMADO
+                        updates.append({"row": r, "col": c, "status": CellStatus.QUEMADO})
 
         self.grid = new_grid
+        if new_burn is not None:
+            self.burn_remaining = new_burn
         return updates
 
     def _spread_to_neighbors(
@@ -469,9 +502,10 @@ class SimulationEngine:
         r: int,
         c: int,
         new_grid: list[list[CellStatus]],
+        new_burn: list[list[int]] | None,
         updates: list[dict],
     ) -> None:
-        directions = [
+        base_dirs = [
             (-1, -1, 225),
             (-1, 0, 180),
             (-1, 1, 135),
@@ -482,7 +516,10 @@ class SimulationEngine:
             (1, 1, 45),
         ]
 
-        for dr, dc, angle in directions:
+        random.shuffle(base_dirs)
+        check_count = random.randint(4, 6)
+
+        for dr, dc, angle in base_dirs[:check_count]:
             nr, nc = r + dr, c + dc
             if not (0 <= nr < self.rows and 0 <= nc < self.cols):
                 continue
@@ -490,8 +527,12 @@ class SimulationEngine:
                 continue
 
             prob = self._spread_probability_inp(r, c, nr, nc, angle)
-            if prob > 0 and (hash((nr, nc, id(self))) % 1000) / 1000 < prob:
+            noise = random.uniform(0.75, 1.25)
+            prob = min(prob * noise, 0.95)
+            if prob > 0 and random.random() < prob:
                 new_grid[nr][nc] = CellStatus.FUEGO
+                if new_burn is not None:
+                    new_burn[nr][nc] = random.randint(2, 3)
                 updates.append({"row": nr, "col": nc, "status": CellStatus.FUEGO})
 
     # ------------------------------------------------------------------

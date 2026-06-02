@@ -1,9 +1,12 @@
 <div class="simulator-layout">
   <app-control-panel
-    [windData]="windData()"
+    [windSpeed]="windSpeed()"
+    [windDirection]="windDirection()"
     [canStart]="canStart()"
     [isRunning]="isRunning()"
     [isPaused]="isPaused()"
+    (windSpeedChange)="windSpeed.set($event)"
+    (windDirectionChange)="windDirection.set($event)"
     (startSimulation)="onStart()"
     (pauseSimulation)="onPause()"
     (stopSimulation)="onStop()"
