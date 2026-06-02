@@ -14,7 +14,7 @@ import { Subscription } from 'rxjs';
 })
 export class SimulatorComponent implements OnInit, OnDestroy {
   windData = signal<WindData | null>(null);
-  zoneCoordinates = signal<[number, number][]>([]);
+  zonePolygons = signal<[number, number][][]>([]);
   cellUpdates = signal<CellUpdate[]>([]);
   ignitionPoint = signal<[number, number] | null>(null);
   isRunning = signal(false);
@@ -32,7 +32,7 @@ export class SimulatorComponent implements OnInit, OnDestroy {
       this.simulation.getInitialData().subscribe({
         next: (data) => {
           this.windData.set(data.wind);
-          this.zoneCoordinates.set(data.zoneCoordinates);
+          this.zonePolygons.set(data.zonePolygons);
           this.loading.set(false);
         },
         error: () => this.loading.set(false),

@@ -3,7 +3,7 @@ import asyncio
 import logging
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from .services.kml_parser import parse_polygon_coordinates
+from .services.kml_parser import parse_polygons
 from .services.simulation_engine import SimulationEngine
 
 logging.basicConfig(level=logging.INFO)
@@ -23,13 +23,13 @@ app.add_middleware(
 @app.get("/api/simulation/initial")
 async def get_initial_data():
     try:
-        coordinates = parse_polygon_coordinates()
+        polygons = parse_polygons()
     except Exception as e:
         logger.error("Error parsing KML: %s", e)
-        return {"zoneCoordinates": [], "wind": {"speed": 0, "direction": 0}}
+        return {"zonePolygons": [], "wind": {"speed": 0, "direction": 0}}
 
     return {
-        "zoneCoordinates": coordinates,
+        "zonePolygons": polygons,
         "wind": {"speed": 15.5, "direction": 180},
     }
 
@@ -67,10 +67,12 @@ async def simulation_websocket(ws: WebSocket):
                 config = msg.get("config", {})
                 wind_speed = config.get("windSpeed", 15.5)
                 wind_direction = config.get("windDirection", 180)
+                humidity = config.get("humidity", 0.4)
                 ignition = config.get("ignitionPoint", [0, 0])
                 ignition_lat, ignition_lng = ignition
 
-                coords = parse_polygon_coordinates()
+                all_polygons = parse_polygons()
+                coords = [pt for poly in all_polygons for pt in poly]
 
                 engine.configure(
                     wind_speed=wind_speed,
@@ -79,6 +81,7 @@ async def simulation_websocket(ws: WebSocket):
                     ignition_lng=ignition_lng,
                     zone_coords=coords,
                     send_callback=send_callback,
+                    humidity=humidity,
                 )
                 engine.start()
 

@@ -9,12 +9,12 @@ import * as L from 'leaflet';
   styleUrl: './map-viewer.css',
 })
 export class MapViewer {
-  zoneCoordinates = input<[number, number][]>([]);
+  zonePolygons = input<[number, number][][]>([]);
   cellUpdates = input<CellUpdate[]>([]);
   ignitionPointChange = output<[number, number]>();
 
   private map?: L.Map;
-  private polygon?: L.Polygon;
+  private polygons: L.Polygon[] = [];
   private marker?: L.Marker;
   private gridLayer?: L.LayerGroup;
   private ignitionDivIcon = L.divIcon({
@@ -29,9 +29,9 @@ export class MapViewer {
 
   constructor() {
     effect(() => {
-      const coords = this.zoneCoordinates();
-      if (coords.length && this.map) {
-        this.drawZone(coords);
+      const polygons = this.zonePolygons();
+      if (polygons.length && this.map) {
+        this.drawZones(polygons);
       }
     });
     effect(() => {
@@ -44,9 +44,9 @@ export class MapViewer {
 
   ngAfterViewInit(): void {
     this.initMap();
-    const coords = this.zoneCoordinates();
-    if (coords.length) {
-      this.drawZone(coords);
+    const polygons = this.zonePolygons();
+    if (polygons.length) {
+      this.drawZones(polygons);
     }
   }
 
@@ -69,17 +69,22 @@ export class MapViewer {
     });
   }
 
-  private drawZone(coords: [number, number][]): void {
-    if (this.polygon) {
-      this.polygon.remove();
+  private drawZones(polygons: [number, number][][]): void {
+    this.polygons.forEach((p) => p.remove());
+    this.polygons = [];
+
+    const allBounds = L.latLngBounds([]);
+    for (const coords of polygons) {
+      const polygon = L.polygon(coords, {
+        color: '#e63946',
+        fillColor: '#e63946',
+        fillOpacity: 0.15,
+        weight: 2,
+      }).addTo(this.map!);
+      this.polygons.push(polygon);
+      allBounds.extend(polygon.getBounds());
     }
-    this.polygon = L.polygon(coords, {
-      color: '#e63946',
-      fillColor: '#e63946',
-      fillOpacity: 0.15,
-      weight: 2,
-    }).addTo(this.map!);
-    this.map!.fitBounds(this.polygon.getBounds().pad(0.1));
+    this.map!.fitBounds(allBounds.pad(0.1));
   }
 
   private placeIgnitionMarker(latlng: L.LatLng): void {
@@ -91,15 +96,18 @@ export class MapViewer {
     }).addTo(this.map!);
   }
 
-  private readonly gridSize = 40;
+  private readonly gridSize = 100;
 
   private drawGrid(updates: CellUpdate[]): void {
     if (!this.gridLayer) {
       this.gridLayer = L.layerGroup().addTo(this.map!);
     }
 
-    const bounds = this.polygon?.getBounds();
-    if (!bounds) return;
+    if (!this.polygons.length) return;
+    const bounds = this.polygons[0].getBounds();
+    for (let i = 1; i < this.polygons.length; i++) {
+      bounds.extend(this.polygons[i].getBounds());
+    }
 
     const maxLat = bounds.getNorth();
     const minLat = bounds.getSouth();

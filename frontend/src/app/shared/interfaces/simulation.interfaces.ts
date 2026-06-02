@@ -16,6 +16,6 @@ export interface CellUpdate {
 }
 
 export interface InitialData {
-  zoneCoordinates: [number, number][];
+  zonePolygons: [number, number][][];
   wind: WindData;
 }
