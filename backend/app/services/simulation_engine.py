@@ -2,6 +2,7 @@ import math
 import asyncio
 import os
 import json
+import io
 import subprocess
 import random
 import logging
@@ -10,6 +11,7 @@ from typing import Callable
 
 import requests
 import rasterio
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +21,7 @@ WINDNINJA_CLI_PATH = "C:\\WindNinja\\WindNinja-3.12.0\\bin\\WindNinja_cli.exe"
 DEM_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
 DEM_PATH = os.path.join(DEM_DIR, "elevacion.tif")
 BOUNDS_PATH = os.path.join(DEM_DIR, "elevacion_bounds.json")
+GREENNESS_PATH = os.path.join(DEM_DIR, "vegetacion.json")
 
 DEFAULT_HUMIDITY = 0.4
 DEFAULT_ELEVATION = 1000.0
@@ -54,6 +57,7 @@ class SimulationEngine:
         self._humidity: float = DEFAULT_HUMIDITY
         self.wind_speed_grid: list[list[float]] | None = None
         self.wind_direction_grid: list[list[float]] | None = None
+        self.greenness_grid: list[list[float]] | None = None
         self.burn_remaining: list[list[int]] | None = None
 
     def configure(
@@ -69,6 +73,7 @@ class SimulationEngine:
         self._compute_zone_bounds(zone_coords)
         self._download_elevation_dem()
         self._load_real_elevation_dem()
+        self._compute_vegetation_greenness()
         self.wind_speed = wind_speed
         self.wind_direction = wind_direction
         self._humidity = humidity
@@ -316,6 +321,156 @@ class SimulationEngine:
         self.rows = self.GRID_SIZE
         self.cols = self.GRID_SIZE
 
+    # ------------------------------------------------------------------
+    # Satellite greenness (vegetation from Esri World Imagery)
+    # ------------------------------------------------------------------
+
+    def _lat_lng_to_tile(self, lat: float, lng: float, zoom: int) -> tuple[int, int]:
+        n = 2.0 ** zoom
+        x_tile = int((lng + 180.0) / 360.0 * n)
+        lat_rad = math.radians(lat)
+        y_tile = int(
+            (1.0 - math.log(math.tan(lat_rad) + 1.0 / math.cos(lat_rad)) / math.pi)
+            / 2.0
+            * n
+        )
+        return x_tile, y_tile
+
+    def _geo_to_tile_pixel(
+        self, lat: float, lng: float, zoom: int
+    ) -> tuple[int, int, int, int]:
+        n = 2.0 ** zoom
+        x_pixel = (lng + 180.0) / 360.0 * n * 256.0
+        lat_rad = math.radians(lat)
+        y_pixel = (
+            (1.0 - math.log(math.tan(lat_rad) + 1.0 / math.cos(lat_rad)) / math.pi)
+            / 2.0
+            * n
+            * 256.0
+        )
+        tx = int(x_pixel) // 256
+        ty = int(y_pixel) // 256
+        px = int(x_pixel) % 256
+        py = int(y_pixel) % 256
+        return tx, ty, px, py
+
+    def _pick_zoom_level(self) -> int:
+        lat_min, lat_max, lng_min, lng_max = self._zone_bounds
+        lng_span = lng_max - lng_min
+        if lng_span < 1e-8:
+            lng_span = 0.001
+        target_px_per_cell = 6.0
+        z = math.log2(target_px_per_cell * 360.0 * self.GRID_SIZE / (lng_span * 256.0))
+        return max(12, min(18, int(round(z))))
+
+    def _compute_vegetation_greenness(self) -> None:
+        self.greenness_grid = [
+            [0.0 for _ in range(self.cols)] for _ in range(self.rows)
+        ]
+
+        if os.path.exists(GREENNESS_PATH):
+            try:
+                with open(GREENNESS_PATH, "r") as f:
+                    cached = json.load(f)
+                if cached.get("bounds") == list(self._zone_bounds):
+                    self.greenness_grid = cached["grid"]
+                    logger.info(
+                        "Greenness cargado desde cache (%d celdas)",
+                        len(self.greenness_grid),
+                    )
+                    return
+            except Exception:
+                logger.warning("Error leyendo cache de greenness, recalculando...")
+
+        zoom = self._pick_zoom_level()
+        needed: dict[tuple[int, int], list[tuple[int, int, int, int]]] = {}
+
+        for r in range(self.rows):
+            for c in range(self.cols):
+                lat, lng = self._grid_to_geo(r, c)
+                tx, ty, px, py = self._geo_to_tile_pixel(lat, lng, zoom)
+                key = (tx, ty)
+                if key not in needed:
+                    needed[key] = []
+                needed[key].append((r, c, px, py))
+
+        logger.info(
+            "Descargando %d tile(s) satelitales (zoom %d) para greenness...",
+            len(needed),
+            zoom,
+        )
+
+        tiles: dict[tuple[int, int], Image.Image] = {}
+        for tx, ty in needed:
+            url = (
+                f"https://server.arcgisonline.com/ArcGIS/rest/services"
+                f"/World_Imagery/MapServer/tile/{zoom}/{ty}/{tx}"
+            )
+            try:
+                resp = requests.get(url, timeout=15)
+                if resp.status_code == 200:
+                    img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+                    tiles[(tx, ty)] = img
+            except Exception as e:
+                logger.warning("Error descargando tile %d,%d: %s", tx, ty, e)
+
+        if not tiles:
+            logger.warning(
+                "No se pudieron descargar tiles satelitales, "
+                "usando greenness basado en elevación"
+            )
+            self._greenness_fallback()
+            self._cache_greenness()
+            return
+
+        for (tx, ty), cells in needed.items():
+            img = tiles.get((tx, ty))
+            if img is None:
+                continue
+            for r, c, px, py in cells:
+                if 0 <= px < 256 and 0 <= py < 256:
+                    R, G, B = img.getpixel((px, py))
+                    green = max(0.0, (G - R) / (R + G + B + 1) * 3.0)
+                    self.greenness_grid[r][c] = min(1.0, green)
+
+        self._cache_greenness()
+        sampled = sum(1 for row in self.greenness_grid for v in row if v > 0)
+        logger.info(
+            "Greenness calculado desde satélite (%d celdas con vegetación, zoom %d)",
+            sampled,
+            zoom,
+        )
+
+    def _greenness_fallback(self) -> None:
+        for r in range(self.rows):
+            for c in range(self.cols):
+                elev = self._get_elevation(r, c)
+                if elev >= 2000:
+                    self.greenness_grid[r][c] = 0.15
+                elif elev >= 1500:
+                    self.greenness_grid[r][c] = 0.30
+                elif elev >= 1000:
+                    self.greenness_grid[r][c] = 0.50
+                elif elev >= 500:
+                    self.greenness_grid[r][c] = 0.65
+                else:
+                    self.greenness_grid[r][c] = 0.80
+
+    def _cache_greenness(self) -> None:
+        try:
+            os.makedirs(DEM_DIR, exist_ok=True)
+            with open(GREENNESS_PATH, "w") as f:
+                json.dump(
+                    {
+                        "bounds": list(self._zone_bounds),
+                        "grid": self.greenness_grid,
+                    },
+                    f,
+                )
+            logger.info("Greenness cacheado en %s", GREENNESS_PATH)
+        except Exception as e:
+            logger.warning("Error cacheando greenness: %s", e)
+
     def _build_grid(self) -> None:
         self.grid = [
             [CellStatus.COMBUSTIBLE for _ in range(self.cols)]
@@ -372,17 +527,22 @@ class SimulationEngine:
         return max(0.3, min(P, 3.0))
 
     def _get_vegetation_params(self, r: int, c: int) -> tuple[float, float, float]:
-        elev = self._get_elevation(r, c)
-        if elev >= 2000:
+        g = 0.5
+        if self.greenness_grid is not None and r < len(self.greenness_grid):
+            try:
+                g = self.greenness_grid[r][c]
+            except IndexError:
+                pass
+        if g > 0.60:
             return (1.2, 0.3, 0.05)
-        elif elev >= 1500:
+        elif g > 0.40:
             return (1.1, 0.5, 0.15)
-        elif elev >= 1000:
+        elif g > 0.25:
             return (1.0, 0.7, 0.30)
-        elif elev >= 500:
-            return (0.85, 0.9, 0.45)
+        elif g > 0.10:
+            return (0.8, 0.9, 0.50)
         else:
-            return (0.7, 1.1, 0.60)
+            return (0.5, 1.1, 0.80)
 
     def _spread_probability_inp(
         self,
@@ -418,15 +578,27 @@ class SimulationEngine:
         else:
             background = 0.04 + 0.04 * (1.0 + alignment)
 
-        # Wind-driven component (INP formula) — only downwind
+        # Wind-driven component (INP formula)
         if alignment > 0 and local_speed > 0:
             V_eff = local_speed * alignment
             INP = (K * C * P * (V_eff ** 2)) / H
             wind_prob = INP / (INP + 1.0)
         else:
+            # Pequeña probabilidad contra el viento (pavesas, remolinos)
             wind_prob = 0.0
+            if alignment < 0 and local_speed > 0:
+                V_up = local_speed * (-alignment)
+                INP_up = 0.03 * (K * C * P * (V_up ** 2)) / H
+                wind_prob = min(0.25, INP_up / (INP_up + 1.0))
 
         prob = min(background + wind_prob, 0.95)
+        g = 0.5
+        if self.greenness_grid is not None:
+            try:
+                g = self.greenness_grid[nr][nc]
+            except IndexError:
+                pass
+        prob *= max(0.05, g)
         return prob
 
     # ------------------------------------------------------------------
@@ -479,9 +651,29 @@ class SimulationEngine:
         for r in range(self.rows):
             for c in range(self.cols):
                 if self.grid[r][c] == CellStatus.FUEGO:
-                    # Solo ~55% de las celdas intentan propagarse por paso
                     if random.random() < 0.55:
                         self._spread_to_neighbors(r, c, new_grid, new_burn, updates)
+
+                    g = 0.5
+                    if self.greenness_grid is not None:
+                        try:
+                            g = self.greenness_grid[r][c]
+                        except IndexError:
+                            pass
+                    if g < 0.10:
+                        if random.random() < 0.95:
+                            new_grid[r][c] = CellStatus.QUEMADO
+                            updates.append({"row": r, "col": c, "status": CellStatus.QUEMADO})
+                            if new_burn is not None:
+                                new_burn[r][c] = 0
+                            continue
+                    elif g < 0.25:
+                        if random.random() < 0.70:
+                            new_grid[r][c] = CellStatus.QUEMADO
+                            updates.append({"row": r, "col": c, "status": CellStatus.QUEMADO})
+                            if new_burn is not None:
+                                new_burn[r][c] = 0
+                            continue
 
                     if new_burn is not None:
                         new_burn[r][c] -= 1
@@ -532,7 +724,48 @@ class SimulationEngine:
             if prob > 0 and random.random() < prob:
                 new_grid[nr][nc] = CellStatus.FUEGO
                 if new_burn is not None:
-                    new_burn[nr][nc] = random.randint(2, 3)
+                    g = 0.5
+                    if self.greenness_grid is not None:
+                        try:
+                            g = self.greenness_grid[nr][nc]
+                        except IndexError:
+                            pass
+                    if g < 0.10:
+                        max_burn = 1
+                    elif g < 0.25:
+                        max_burn = 2
+                    else:
+                        max_burn = 3
+                    new_burn[nr][nc] = random.randint(1, max_burn)
+                updates.append({"row": nr, "col": nc, "status": CellStatus.FUEGO})
+
+        # Extra tirada para atrás (15% de la probabilidad INP)
+        for dr, dc, angle in base_dirs:
+            nr, nc = r + dr, c + dc
+            if not (0 <= nr < self.rows and 0 <= nc < self.cols):
+                continue
+            if new_grid[nr][nc] != CellStatus.COMBUSTIBLE:
+                continue
+
+            prob = self._spread_probability_inp(r, c, nr, nc, angle)
+            prob *= 0.10
+
+            if random.random() < prob:
+                new_grid[nr][nc] = CellStatus.FUEGO
+                if new_burn is not None:
+                    g = 0.5
+                    if self.greenness_grid is not None:
+                        try:
+                            g = self.greenness_grid[nr][nc]
+                        except IndexError:
+                            pass
+                    if g < 0.10:
+                        max_burn = 1
+                    elif g < 0.25:
+                        max_burn = 2
+                    else:
+                        max_burn = 3
+                    new_burn[nr][nc] = random.randint(1, max_burn)
                 updates.append({"row": nr, "col": nc, "status": CellStatus.FUEGO})
 
     # ------------------------------------------------------------------
