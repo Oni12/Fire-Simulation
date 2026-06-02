@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+backend/uvicorn_out.txt
+backend/uvicorn_err.txt
+frontend/dist/
+frontend/node_modules/
+.angular/

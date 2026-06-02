@@ -1,0 +1,16 @@
+<div class="simulator-layout">
+  <app-control-panel
+    [windData]="windData()"
+    [canStart]="canStart"
+    [isRunning]="isRunning()"
+    [isPaused]="isPaused()"
+    (startSimulation)="onStart()"
+    (pauseSimulation)="onPause()"
+    (stopSimulation)="onStop()"
+  />
+  <app-map-viewer
+    [zoneCoordinates]="zoneCoordinates()"
+    [cellUpdates]="cellUpdates()"
+    (ignitionPointChange)="onIgnitionPointChange($event)"
+  />
+</div>

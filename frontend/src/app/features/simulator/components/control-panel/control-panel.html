@@ -1,0 +1,47 @@
+<div class="panel">
+  <h2 class="panel-title">Panel de Control</h2>
+
+  <div class="wind-section">
+    <h3>Viento</h3>
+    <div class="wind-row">
+      <span class="label">Velocidad:</span>
+      <span class="value">{{ windData()?.speed ?? '—' }} km/h</span>
+    </div>
+    <div class="wind-row">
+      <span class="label">Dirección:</span>
+      <span class="value">{{ windData()?.direction ?? '—' }}°</span>
+    </div>
+  </div>
+
+  <div class="controls-section">
+    <h3>Simulación</h3>
+    <button
+      class="btn btn-start"
+      [disabled]="!canStart()"
+      (click)="startSimulation.emit()"
+    >
+      Iniciar Simulación
+    </button>
+    <button
+      class="btn btn-pause"
+      [disabled]="!isRunning() || isPaused()"
+      (click)="pauseSimulation.emit()"
+    >
+      Pausar
+    </button>
+    <button
+      class="btn btn-stop"
+      [disabled]="!isRunning()"
+      (click)="stopSimulation.emit()"
+    >
+      Reiniciar
+    </button>
+  </div>
+
+  <div class="status-section">
+    <h3>Estado</h3>
+    <span class="status-badge" [class.running]="isRunning()" [class.paused]="isPaused()">
+      {{ isRunning() ? (isPaused() ? 'Pausado' : 'Corriendo') : 'Detenido' }}
+    </span>
+  </div>
+</div>

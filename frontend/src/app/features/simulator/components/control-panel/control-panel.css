@@ -1,0 +1,121 @@
+.panel {
+  width: 280px;
+  min-width: 280px;
+  height: 100%;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 24px 20px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+.panel-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #ffffff;
+  margin: 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #2d2d4a;
+}
+
+.wind-section h3,
+.controls-section h3,
+.status-section h3 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #8888aa;
+  margin: 0 0 12px;
+}
+
+.wind-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+}
+
+.wind-row .label {
+  color: #8888aa;
+}
+
+.wind-row .value {
+  color: #ffffff;
+  font-weight: 500;
+}
+
+.controls-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.btn {
+  width: 100%;
+  padding: 10px 0;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, opacity 0.2s;
+}
+
+.btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.btn-start {
+  background: #e63946;
+  color: #fff;
+}
+
+.btn-start:hover:not(:disabled) {
+  background: #c1121f;
+}
+
+.btn-pause {
+  background: #457b9d;
+  color: #fff;
+}
+
+.btn-pause:hover:not(:disabled) {
+  background: #1d3557;
+}
+
+.btn-stop {
+  background: #2d2d4a;
+  color: #e0e0e0;
+}
+
+.btn-stop:hover:not(:disabled) {
+  background: #3d3d5c;
+}
+
+.status-section {
+  margin-top: auto;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  background: #2d2d4a;
+  color: #8888aa;
+}
+
+.status-badge.running {
+  background: #1a3a2a;
+  color: #2ecc71;
+}
+
+.status-badge.paused {
+  background: #3a2a1a;
+  color: #f39c12;
+}
