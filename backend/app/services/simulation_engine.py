@@ -2,6 +2,7 @@ import math
 import asyncio
 import os
 import json
+import subprocess
 import logging
 from enum import Enum
 from typing import Callable
@@ -12,6 +13,7 @@ import rasterio
 logger = logging.getLogger(__name__)
 
 OPENTOPOGRAPHY_API_KEY = "5090635d399f89371c7647df4ff02716"
+WINDNINJA_CLI_PATH = "C:\\WindNinja\\WindNinja-3.12.0\\bin\\WindNinja_cli.exe"
 
 DEM_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
 DEM_PATH = os.path.join(DEM_DIR, "elevacion.tif")
@@ -49,6 +51,8 @@ class SimulationEngine:
         self.wind_speed: float = 0
         self.wind_direction: float = 0
         self._humidity: float = DEFAULT_HUMIDITY
+        self.wind_speed_grid: list[list[float]] | None = None
+        self.wind_direction_grid: list[list[float]] | None = None
 
     def configure(
         self,
@@ -63,10 +67,11 @@ class SimulationEngine:
         self._compute_zone_bounds(zone_coords)
         self._download_elevation_dem()
         self._load_real_elevation_dem()
-        self._build_grid()
         self.wind_speed = wind_speed
         self.wind_direction = wind_direction
         self._humidity = humidity
+        self._run_windninja()
+        self._build_grid()
         self._send_callback = send_callback
 
         row, col = self._geo_to_grid(ignition_lat, ignition_lng)
@@ -178,6 +183,104 @@ class SimulationEngine:
             logger.error("Error al leer el DEM: %s", e)
 
     # ------------------------------------------------------------------
+    # WindNinja simulation & fallback
+    # ------------------------------------------------------------------
+
+    def _locate_output(self, base: str, suffixes: list[str]) -> str | None:
+        for suffix in suffixes:
+            path = base + suffix
+            if os.path.exists(path):
+                return path
+        return None
+
+    def _read_grid_from_raster(self, path: str, grid: list[list[float]]) -> None:
+        try:
+            with rasterio.open(path) as dataset:
+                band = dataset.read(1)
+                nodata = dataset.nodata
+                for r in range(self.rows):
+                    for c in range(self.cols):
+                        lat, lng = self._grid_to_geo(r, c)
+                        try:
+                            rr, rc = dataset.index(lng, lat)
+                            if 0 <= rr < band.shape[0] and 0 <= rc < band.shape[1]:
+                                val = float(band[rr, rc])
+                                if nodata is None or val != nodata:
+                                    grid[r][c] = val
+                        except Exception:
+                            pass
+        except Exception as e:
+            logger.warning("Error leyendo raster %s: %s", path, e)
+
+    def _run_windninja(self) -> None:
+        self.wind_speed_grid = [
+            [self.wind_speed for _ in range(self.cols)] for _ in range(self.rows)
+        ]
+        self.wind_direction_grid = [
+            [self.wind_direction for _ in range(self.cols)] for _ in range(self.rows)
+        ]
+
+        if not os.path.exists(DEM_PATH):
+            logger.info("DEM no disponible, omitiendo WindNinja")
+            return
+
+        try:
+            cmd = [
+                WINDNINJA_CLI_PATH,
+                "--elevation_file", DEM_PATH,
+                "--input_speed", str(self.wind_speed),
+                "--input_direction", str(self.wind_direction),
+                "--output_speed_units", "kph",
+                "--mesh_resolution", "100",
+                "--vegetation", "grass",
+                "--num_threads", "4",
+            ]
+            logger.info("Ejecutando WindNinja: %s", " ".join(cmd))
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if result.returncode != 0:
+                logger.warning("WindNinja retornó código %d: %s", result.returncode, result.stderr[:300])
+                raise RuntimeError("WindNinja falló")
+
+            logger.info("WindNinja completado exitosamente")
+
+            base = os.path.splitext(DEM_PATH)[0]
+            vel_path = self._locate_output(base, [
+                "_vel.tif", "_speed.tif", "_vel.asc", "_speed.asc",
+            ])
+            ang_path = self._locate_output(base, [
+                "_ang.tif", "_direction.tif", "_ang.asc", "_direction.asc",
+            ])
+
+            if vel_path and ang_path:
+                self.wind_speed_grid = [
+                    [0.0 for _ in range(self.cols)] for _ in range(self.rows)
+                ]
+                self.wind_direction_grid = [
+                    [0.0 for _ in range(self.cols)] for _ in range(self.rows)
+                ]
+                self._read_grid_from_raster(vel_path, self.wind_speed_grid)
+                self._read_grid_from_raster(ang_path, self.wind_direction_grid)
+                logger.info("Viento local cargado desde WindNinja")
+            else:
+                logger.warning("No se encontraron archivos de salida de WindNinja, usando fallback")
+                self._apply_wind_fallback()
+
+        except FileNotFoundError:
+            logger.warning("WindNinja no está instalado en %s", WINDNINJA_CLI_PATH)
+            self._apply_wind_fallback()
+        except (subprocess.TimeoutExpired, OSError, Exception) as e:
+            logger.warning("WindNinja no disponible (%s), usando fallback matemático", e)
+            self._apply_wind_fallback()
+
+    def _apply_wind_fallback(self) -> None:
+        for r in range(self.rows):
+            for c in range(self.cols):
+                elev = self._get_elevation(r, c)
+                factor = 1.0 + (elev - 1000.0) / 1000.0
+                self.wind_speed_grid[r][c] = max(0.0, self.wind_speed * factor)
+                self.wind_direction_grid[r][c] = self.wind_direction
+
+    # ------------------------------------------------------------------
     # Zone bounds & grid
     # ------------------------------------------------------------------
 
@@ -282,14 +385,24 @@ class SimulationEngine:
         nc: int,
         neighbor_angle: float,
     ) -> float:
-        if self.wind_speed <= 0:
+        local_speed = (
+            self.wind_speed_grid[nr][nc]
+            if self.wind_speed_grid is not None
+            else self.wind_speed
+        )
+        local_dir = (
+            self.wind_direction_grid[nr][nc]
+            if self.wind_direction_grid is not None
+            else self.wind_direction
+        )
+        if local_speed <= 0:
             return 0.3
-        angle_diff = (neighbor_angle - self.wind_direction + 360) % 360
+        angle_diff = (neighbor_angle - local_dir + 360) % 360
         if angle_diff > 180:
             angle_diff = 360 - angle_diff
         alignment = math.cos(math.radians(angle_diff))
         alignment = max(0.0, alignment)
-        V_eff = self.wind_speed * alignment
+        V_eff = local_speed * alignment
         K, C, h_extra = self._get_vegetation_params(nr, nc)
         P = self._get_slope_factor(r, c, nr, nc)
         H = self._humidity * 0.35 + h_extra

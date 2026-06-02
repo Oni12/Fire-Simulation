@@ -2,7 +2,7 @@ import os
 import xml.etree.ElementTree as ET
 
 KML_NS = {"kml": "http://www.opengis.net/kml/2.2"}
-KML_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "data", "mapa.kml")
+KML_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "data", "mapaFinal.kml")
 
 
 def parse_polygons() -> list[list[list[float]]]:
