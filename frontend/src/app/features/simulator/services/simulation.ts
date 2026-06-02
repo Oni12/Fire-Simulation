@@ -4,8 +4,8 @@ import { webSocket, WebSocketSubject } from 'rxjs/webSocket';
 import { Observable, map } from 'rxjs';
 import { InitialData, SimulationConfig, CellUpdate } from '../../../shared/interfaces';
 
-const API_BASE = 'http://localhost:8000';
-const WS_URL = 'ws://localhost:8000/api/simulation/ws';
+const API_BASE = 'http://localhost:8080';
+const WS_URL = 'ws://localhost:8080/api/simulation/ws';
 
 @Injectable({
   providedIn: 'root',

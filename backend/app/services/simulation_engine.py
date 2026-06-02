@@ -45,10 +45,7 @@ class SimulationEngine:
         self._send_callback = send_callback
 
         row, col = self._geo_to_grid(ignition_lat, ignition_lng)
-        row = max(0, min(row, self.rows - 1))
-        col = max(0, min(col, self.cols - 1))
-        if 0 <= row < self.rows and 0 <= col < self.cols:
-            self.grid[row][col] = CellStatus.FUEGO
+        self.grid[row][col] = CellStatus.FUEGO
 
     def _compute_zone_bounds(self, coords: list[list[float]]) -> None:
         lats = [p[0] for p in coords]
@@ -86,14 +83,20 @@ class SimulationEngine:
 
     def _geo_to_grid(self, lat: float, lng: float) -> tuple[int, int]:
         lat_min, lat_max, lng_min, lng_max = self._zone_bounds
-        row = int((lat_max - lat) / (lat_max - lat_min) * (self.rows - 1))
-        col = int((lng - lng_min) / (lng_max - lng_min) * (self.cols - 1))
+        lat_span = lat_max - lat_min
+        lng_span = lng_max - lng_min
+        row = int(((lat_max - lat) / lat_span) * self.rows)
+        col = int(((lng - lng_min) / lng_span) * self.cols)
+        row = max(0, min(row, self.rows - 1))
+        col = max(0, min(col, self.cols - 1))
         return row, col
 
     def _grid_to_geo(self, row: int, col: int) -> tuple[float, float]:
         lat_min, lat_max, lng_min, lng_max = self._zone_bounds
-        lat = lat_max - (row + 0.5) * (lat_max - lat_min) / self.rows
-        lng = lng_min + (col + 0.5) * (lng_max - lng_min) / self.cols
+        lat_step = (lat_max - lat_min) / self.rows
+        lng_step = (lng_max - lng_min) / self.cols
+        lat = lat_max - (row + 0.5) * lat_step
+        lng = lng_min + (col + 0.5) * lng_step
         return lat, lng
 
     def start(self) -> None:

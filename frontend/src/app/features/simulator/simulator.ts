@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, signal } from '@angular/core';
+import { Component, OnInit, OnDestroy, signal, computed } from '@angular/core';
 import { SimulationService } from './services/simulation';
 import { ControlPanel } from './components/control-panel/control-panel';
 import { MapViewer } from './components/map-viewer/map-viewer';
@@ -20,6 +20,8 @@ export class SimulatorComponent implements OnInit, OnDestroy {
   isRunning = signal(false);
   isPaused = signal(false);
   loading = signal(true);
+
+  canStart = computed(() => this.ignitionPoint() !== null && !this.isRunning());
 
   private subs: Subscription[] = [];
 
@@ -51,10 +53,6 @@ export class SimulatorComponent implements OnInit, OnDestroy {
 
   onIgnitionPointChange(point: [number, number]): void {
     this.ignitionPoint.set(point);
-  }
-
-  get canStart(): boolean {
-    return this.ignitionPoint() !== null && !this.isRunning();
   }
 
   onStart(): void {

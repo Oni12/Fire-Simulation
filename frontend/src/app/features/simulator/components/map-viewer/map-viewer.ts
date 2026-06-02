@@ -1,4 +1,4 @@
-import { Component, input, output, effect, inject, DestroyRef, signal } from '@angular/core';
+import { Component, input, output, effect, inject, NgZone } from '@angular/core';
 import { CellUpdate } from '../../../../shared/interfaces';
 import * as L from 'leaflet';
 
@@ -24,7 +24,7 @@ export class MapViewer {
     iconAnchor: [12, 24],
   });
 
-  private destroyRef = inject(DestroyRef);
+  private ngZone = inject(NgZone);
 
   constructor() {
     effect(() => {
@@ -55,14 +55,16 @@ export class MapViewer {
       zoom: 13,
     });
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
       maxZoom: 19,
-      attribution: '© OpenStreetMap contributors',
+      attribution: 'Esri, Maxar, Earthstar Geographics',
     }).addTo(this.map);
 
     this.map.on('click', (e: L.LeafletMouseEvent) => {
-      this.placeIgnitionMarker(e.latlng);
-      this.ignitionPointChange.emit([e.latlng.lat, e.latlng.lng]);
+      this.ngZone.run(() => {
+        this.placeIgnitionMarker(e.latlng);
+        this.ignitionPointChange.emit([e.latlng.lat, e.latlng.lng]);
+      });
     });
   }
 
@@ -88,6 +90,8 @@ export class MapViewer {
     }).addTo(this.map!);
   }
 
+  private readonly gridSize = 40;
+
   private drawGrid(updates: CellUpdate[]): void {
     if (this.gridLayer) {
       this.gridLayer.clearLayers();
@@ -95,26 +99,26 @@ export class MapViewer {
       this.gridLayer = L.layerGroup().addTo(this.map!);
     }
 
-    const polyBounds = this.polygon?.getBounds();
-    if (!polyBounds) return;
-
     if (!updates.length) return;
 
-    const bounds = this.polygon!.getBounds();
-    const latSpan = bounds.getNorth() - bounds.getSouth();
-    const lngSpan = bounds.getEast() - bounds.getWest();
+    const bounds = this.polygon?.getBounds();
+    if (!bounds) return;
 
-    const maxRow = Math.max(...updates.map((u) => u.row), 0) + 1;
-    const maxCol = Math.max(...updates.map((u) => u.col), 0) + 1;
+    const maxLat = bounds.getNorth();
+    const minLat = bounds.getSouth();
+    const minLng = bounds.getWest();
+    const maxLng = bounds.getEast();
 
-    const cellLat = latSpan / Math.max(maxRow, 1);
-    const cellLng = lngSpan / Math.max(maxCol, 1);
+    const latSpan = maxLat - minLat;
+    const lngSpan = maxLng - minLng;
+    const latStep = latSpan / this.gridSize;
+    const lngStep = lngSpan / this.gridSize;
 
     for (const update of updates) {
-      const north = bounds.getNorth() - update.row * cellLat;
-      const south = north - cellLat;
-      const west = bounds.getWest() + update.col * cellLng;
-      const east = west + cellLng;
+      const cellMaxLat = maxLat - update.row * latStep;
+      const cellMinLat = maxLat - (update.row + 1) * latStep;
+      const cellMinLng = minLng + update.col * lngStep;
+      const cellMaxLng = minLng + (update.col + 1) * lngStep;
 
       const color =
         update.status === 'fuego'
@@ -126,8 +130,8 @@ export class MapViewer {
       if (color !== 'transparent') {
         L.rectangle(
           [
-            [north, west],
-            [south, east],
+            [cellMaxLat, cellMinLng],
+            [cellMinLat, cellMaxLng],
           ],
           {
             color,
